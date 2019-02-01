@@ -22,57 +22,42 @@ cuda_available = torch.cuda.is_available()
 
 
 def main(args):
-    ####################
-    # Define Transforms
-    ####################
     transforms = {"resize": (32, 32), "normalize": {"mean": [0.131], "std": [0.308]}}
-
-    ####################
-    # Define Dataset
-    ####################
-    train_set = MNIST(
-        args.dataset_dir / "train-images.idx3-ubyte",
-        args.dataset_dir / "train-labels.idx1-ubyte",
-        transforms=transforms,
-    )
-    val_set = MNIST(
-        args.dataset_dir / "t10k-images.idx3-ubyte", args.dataset_dir / "t10k-labels.idx1-ubyte", transforms=transforms
-    )
-
-    ####################
-    # Define DataLoader
-    ####################
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=2)
-
-    ####################
-    # Define Network
-    ####################
-    net = Net(num_classes=10)
-    if cuda_available:
-        net = net.cuda()
-
-    ####################
-    # Define Optimizer
-    ####################
-    optimizer = torch.optim.SGD(net.parameters(), lr=args.lr_init)
-
-    ##################################
-    # Define Learning Rate Scheduler
-    ##################################
+    train_loader, val_loader = prepare_dataloaders(args.dataset_dir, transforms, args.batch_size)
+    model = prepare_model()
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init)
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer, args.lr_drop_milestones, gamma=args.lr_drop_multiplier
     )
 
     for epoch in range(args.max_epochs):
-        train_phase(epoch, net, train_loader, optimizer)
-        val_phase(epoch, net, val_loader)
+        train_phase(epoch, model, train_loader, optimizer)
+        val_phase(epoch, model, val_loader)
         lr_scheduler.step(epoch + 1)
         # performance = calculate_performance(pred, labels)
 
 
-def train_phase(epoch, net, dataloader, optimizer):
-    net.train()
+def prepare_dataloaders(dataset_dir, transforms, batch_size):
+    train_set = MNIST(
+        dataset_dir / "train-images.idx3-ubyte", dataset_dir / "train-labels.idx1-ubyte", transforms=transforms
+    )
+    val_set = MNIST(
+        dataset_dir / "t10k-images.idx3-ubyte", dataset_dir / "t10k-labels.idx1-ubyte", transforms=transforms
+    )
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=2)
+    return train_loader, val_loader
+
+
+def prepare_model():
+    model = Net(num_classes=10)
+    if cuda_available:
+        model = model.cuda()
+    return model
+
+
+def train_phase(epoch, model, dataloader, optimizer):
+    model.train()
     for i, (images, gt_classes, gt_bboxes, gt_counts) in enumerate(dataloader):
         optimizer.zero_grad()
 
@@ -82,7 +67,7 @@ def train_phase(epoch, net, dataloader, optimizer):
             gt_bboxes = gt_bboxes.cuda()
             gt_counts = gt_counts.cuda()
 
-        pred_classes, pred_bboxes, pred_counts = net(images)
+        pred_classes, pred_bboxes, pred_counts = model(images)
         losses = compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
         losses["total_loss"].backward()
 
@@ -90,11 +75,13 @@ def train_phase(epoch, net, dataloader, optimizer):
 
         optimizer.step()
 
+    torch.save(model.state_dict(), f'checkpoints/model_epoch{epoch}.pth')
+
 
 def print_progress(epoch, it, losses, print_every=50):
     if (it + 1) % print_every == 0:
         print("-" * 60)
-        print(f"Epoch {epoch}, Iteration {iter + 1}")
+        print(f"Epoch {epoch}, Iteration {it + 1}")
         print("-" * 30)
         print("\n".join([f"{n:16s}: {l.item():.4f}" for n, l in losses.items()]))
 
@@ -109,8 +96,8 @@ def compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes
     return losses
 
 
-def val_phase(epoch, net, dataloader):
-    net.eval()
+def val_phase(epoch, model, dataloader):
+    model.eval()
     for i, (images, classes, bboxes, counts) in enumerate(dataloader):
         if cuda_available:
             images = images.cuda()
@@ -118,7 +105,7 @@ def val_phase(epoch, net, dataloader):
             bboxes = bboxes.cuda()
             counts = counts.cuda()
 
-        pred = net(images)
+        pred = model(images)
 
 
 if __name__ == "__main__":
