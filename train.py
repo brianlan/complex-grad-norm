@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from src.model import Net
 from src.dataset import MNIST
 from src.loss import class_loss, bbox_loss, counter_loss
-
+from src.measure import classification_accuracy, counter_accuracy, bbox_iou
 
 parser = argparse.ArgumentParser("Training script")
 parser.add_argument("--max-epochs", default=10, type=int)
@@ -35,7 +35,6 @@ def main(args):
         train_phase(epoch, model, train_loader, optimizer)
         val_phase(epoch, model, val_loader)
         lr_scheduler.step(epoch + 1)
-        # performance = calculate_performance(pred, labels)
 
 
 def prepare_dataloaders(dataset_dir, transforms, batch_size):
@@ -72,19 +71,22 @@ def train_phase(epoch, model, dataloader, optimizer):
         losses = compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
         losses["total_loss"].backward()
 
-        print_progress(epoch, i, losses)
+        performances = measure_performances(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
+        print_progress(epoch, i, losses, performances)
 
         optimizer.step()
 
-    torch.save(model.state_dict(), f'checkpoints/model_epoch{epoch}.pth')
+    torch.save(model.state_dict(), f"checkpoints/model_epoch{epoch}.pth")
 
 
-def print_progress(epoch, it, losses, print_every=50):
+def print_progress(epoch, it, losses, performances, print_every=50):
     if (it + 1) % print_every == 0:
         print("-" * 60)
         print(f"Epoch {epoch}, Iteration {it + 1}")
-        print("-" * 30)
+        print("." * 30)
         print("\n".join([f"{n:16s}: {l.item():.4f}" for n, l in losses.items()]))
+        print("." * 30)
+        print("\n".join([f"{n:16s}: {p.item():.4f}" for n, p in performances.items()]))
 
 
 def compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts):
@@ -95,6 +97,15 @@ def compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes
     }
     losses["total_loss"] = functools.reduce(lambda x, y: x + y, [l for n, l in losses.items()])
     return losses
+
+
+def measure_performances(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts):
+    performances = {
+        "cls_acc": classification_accuracy(pred_classes, gt_classes),
+        "cnt_acc": counter_accuracy(pred_counts, gt_counts),
+        "bbox_iou": bbox_iou(pred_bboxes, gt_bboxes),
+    }
+    return performances
 
 
 def val_phase(epoch, model, dataloader):

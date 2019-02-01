@@ -1,22 +1,23 @@
+import torch
 import torch.nn.functional as F
+
+from .helpers import iou
 
 
 def classification_accuracy(pred_logits, gt_classes):
-    scores = F.softmax(pred_logits, axis=1)
-    pred_classes = torch.argmax(scores)
-    correct = (pred_classes == gt_classes).sum()
+    scores = F.softmax(pred_logits, dim=1)
+    pred_classes = torch.argmax(scores, dim=1)
+    correct = (pred_classes == gt_classes).sum().float()
     accuracy = correct / len(gt_classes)
     return accuracy
 
 
 def counter_accuracy(pred_counts, gt_counts):
-    correct = (pred_counts, gt_counts)
+    correct = (pred_counts[:, 0].round() == gt_counts).sum().float()
     accuracy = correct / len(gt_counts)
     return accuracy
 
 
 def bbox_iou(pred_bboxes, gt_bboxes):
-    intsec_area_left = max(self.left, other.left)
-    intsec_area_right = min(self.right, other.right)
-    intsec_area_top = max(self.top, other.top)
-    intsec_area_bottom = min(self.bottom, other.bottom)
+    ious = iou(pred_bboxes, gt_bboxes)
+    return ious.mean()
