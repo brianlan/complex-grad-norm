@@ -16,7 +16,8 @@ parser.add_argument("--batch-size", default=64, type=int)
 parser.add_argument("--lr-init", default=0.001, type=float)
 parser.add_argument("--lr-drop-milestones", nargs="+", default=[4, 8], type=int)
 parser.add_argument("--lr-drop-multiplier", default=0.1, type=float)
-parser.add_argument("--dataset-dir", default=P("/mnt/d/dataset/MNIST"), type=P)
+# parser.add_argument("--dataset-dir", default=P("/mnt/d/dataset/MNIST"), type=P)
+parser.add_argument("--dataset-dir", default=P("/data/datasets/MNIST"), type=P)
 
 cuda_available = torch.cuda.is_available()
 
