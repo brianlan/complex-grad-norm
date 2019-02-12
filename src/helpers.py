@@ -22,3 +22,7 @@ def iou(bboxes_a, bboxes_b):
     i = area(intersection(bboxes_a, bboxes_b))
     u = area(bboxes_a) + area(bboxes_b) - i
     return i / (u + 1e-7)
+
+
+def get_current_lr(optimizer):
+    return min(g["lr"] for g in optimizer.param_groups)
