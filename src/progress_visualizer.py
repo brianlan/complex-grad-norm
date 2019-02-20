@@ -5,7 +5,7 @@ def to_console(logger, name, epoch, it, losses, performances, other_metrics=None
     progress_str += "\n".join([f"{n:16s}: {l.item():.4f}" for n, l in losses.items()]) + "\n\n"
     progress_str += "\n".join([f"{n:16s}: {p.item():.4f}" for n, p in performances.items()])
     if other_metrics:
-        progress_str += "\n".join([f"{n:16s}: {m.item():.4f}" for n, m in other_metrics.items()])
+        progress_str += "\n\n" + "\n".join([f"{n:16s}: {m.item():.4f}" for n, m in other_metrics.items()])
     logger.info(progress_str)
 
 
@@ -41,5 +41,13 @@ class ProgressVisualizer:
         if (it + 1) % self.show_progress_every_n_iters == 0:
             for display_func, handler in zip(self.display_funcs, self.handlers):
                 display_func(
-                    handler, self.name, epoch, it, losses, performances, other_metrics=other_metrics, n_iters_per_epoch=self.n_iters_per_epoch, lr=lr
+                    handler,
+                    self.name,
+                    epoch,
+                    it,
+                    losses,
+                    performances,
+                    other_metrics=other_metrics,
+                    n_iters_per_epoch=self.n_iters_per_epoch,
+                    lr=lr,
                 )

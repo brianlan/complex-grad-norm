@@ -25,7 +25,7 @@ class SimpleGradNormalizer:
     def normalize_loss_weight(self):
         num_losses = len(self.init_loss)
         coef = num_losses / self.loss_weight.sum()
-        self.loss_weight = self.loss_weight * coef
+        self.loss_weight.data[:] = self.loss_weight * coef
 
     def adjust_losses(self, losses):
         if self.init_loss is None:
@@ -65,6 +65,13 @@ class SimpleGradNormalizer:
         C_cls = (G_avg * (inv_rate_cls) ** self.alpha).detach()
         C_loc = (G_avg * (inv_rate_loc) ** self.alpha).detach()
         C_cnt = (G_avg * (inv_rate_cnt) ** self.alpha).detach()
+
+        print(f"=" * 120)
+        print(f"|   G   | {G_cls_norm.item()}, {G_loc_norm.item()}, {G_cnt_norm.item()}")
+        print(f"| lhat  | {lhat_cls.item()}, {lhat_loc.item()}, {lhat_cnt.item()}")
+        print(f"| inv_r | {inv_rate_cls.item()}, {inv_rate_loc.item()}, {inv_rate_cnt.item()}")
+        print(f"|   C   | {C_cls.item()}, {C_loc.item()}, {C_cnt.item()}")
+        print(f"=" * 120)
 
         self.optim.zero_grad()
         Lgrad = nn.L1Loss()(G_cls_norm, C_cls) + nn.L1Loss()(G_loc_norm, C_loc) + nn.L1Loss()(G_cnt_norm, C_cnt)

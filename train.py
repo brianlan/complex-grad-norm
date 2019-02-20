@@ -33,7 +33,7 @@ console_logger = get_logger()
 
 
 def main(args):
-    grad_normalizer = SimpleGradNormalizer(lr_init=args.lr_init) if args.gradnorm else None
+    grad_normalizer = SimpleGradNormalizer(lr_init=args.lr_init, alpha=1.5) if args.gradnorm else None
     transforms = {"resize": (32, 32), "normalize": {"mean": [0.131], "std": [0.308]}}
     train_loader, val_loader = prepare_dataloaders(args.dataset_dir, transforms, args.train_batch_size)
     model = prepare_model()
@@ -128,7 +128,7 @@ def train_phase(epoch, model, dataloader, optimizer, visualizer, grad_normalizer
 
         if grad_normalizer is not None:
             grad_normalizer.adjust_grad(losses, model)
-            loss_weight = {f"w_{i}": w.item() for i, w in enumerate(grad_normalizer.loss_weight)}
+            loss_weight = {f"w_{i}": w for i, w in enumerate(grad_normalizer.loss_weight)}
             visualizer.display(epoch, i, losses, performances, other_metrics=loss_weight, lr=get_current_lr(optimizer))
         else:
             losses["total_loss"].backward()
