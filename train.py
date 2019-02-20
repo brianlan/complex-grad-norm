@@ -14,6 +14,7 @@ from src.loss import class_loss, bbox_loss, counter_loss
 from src.measure import classification_accuracy, counter_accuracy, bbox_iou
 from src.logger import get_logger
 from src.progress_visualizer import ProgressVisualizer
+from src.gradnorm import SimpleGradNormalizer
 
 parser = argparse.ArgumentParser("Training script")
 parser.add_argument("--max-epochs", default=30, type=int)
@@ -21,9 +22,10 @@ parser.add_argument("--train-batch-size", default=64, type=int)
 parser.add_argument("--lr-init", default=0.01, type=float)
 parser.add_argument("--lr-drop-milestones", nargs="+", default=[8, 16, 24, 27], type=int)
 parser.add_argument("--lr-drop-multiplier", default=0.2, type=float)
-# parser.add_argument("--dataset-dir", default=P("/mnt/d/dataset/MNIST"), type=P)
-parser.add_argument("--dataset-dir", default=P("/data/datasets/MNIST"), type=P)
+parser.add_argument("--dataset-dir", default=P("/mnt/d/dataset/MNIST"), type=P)
+# parser.add_argument("--dataset-dir", default=P("/data/datasets/MNIST"), type=P)
 parser.add_argument("--show-progress-every-n-iters", default=10, type=int)
+parser.add_argument("--gradnorm", action="store_true", default=False)
 
 cuda_available = torch.cuda.is_available()
 tb_writer = SummaryWriter()
@@ -31,6 +33,7 @@ console_logger = get_logger()
 
 
 def main(args):
+    grad_normalizer = SimpleGradNormalizer(lr_init=args.lr_init) if args.gradnorm else None
     transforms = {"resize": (32, 32), "normalize": {"mean": [0.131], "std": [0.308]}}
     train_loader, val_loader = prepare_dataloaders(args.dataset_dir, transforms, args.train_batch_size)
     model = prepare_model()
@@ -41,14 +44,14 @@ def main(args):
     train_progress_visualizer = ProgressVisualizer(
         "train",
         n_iters_per_epoch=math.ceil(len(train_loader.dataset) / args.train_batch_size),
-        show_progress_every_n_iters=args.show_progress_every_n_iters,
+        # show_progress_every_n_iters=args.show_progress_every_n_iters,
         tb_writer=tb_writer,
         console_logger=console_logger,
     )
     val_progress_visualizer = ProgressVisualizer("val", tb_writer=tb_writer, console_logger=console_logger)
 
     for epoch in range(args.max_epochs):
-        train_phase(epoch, model, train_loader, optimizer, train_progress_visualizer)
+        train_phase(epoch, model, train_loader, optimizer, train_progress_visualizer, grad_normalizer=grad_normalizer)
         val_phase(epoch, model, val_loader, val_progress_visualizer)
         lr_scheduler.step(epoch + 1)
 
@@ -75,7 +78,7 @@ def prepare_model():
     return model
 
 
-def train_phase(epoch, model, dataloader, optimizer, visualizer):
+def train_phase(epoch, model, dataloader, optimizer, visualizer, grad_normalizer=None):
     model.train()
     for i, (images, gt_classes, gt_bboxes, gt_counts) in enumerate(dataloader):
         optimizer.zero_grad()
@@ -86,24 +89,66 @@ def train_phase(epoch, model, dataloader, optimizer, visualizer):
             gt_bboxes = gt_bboxes.cuda()
             gt_counts = gt_counts.cuda()
 
-        pred_classes, pred_bboxes, pred_counts = model(images)
-        losses = compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
+        pred_cls_logits, pred_bboxes, pred_counts = model(images)
 
-        performances = measure_performances(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
-        visualizer.display(epoch, i, losses, performances, lr=get_current_lr(optimizer))
+        # ------------------ DEBUG ---------------------
+        # import torch.nn.functional as F
+        # import torch.nn as nn
+        # w = nn.Parameter(torch.tensor([1.0]), requires_grad=True)
+        #
+        # # H = model.layer1.conv.weight[0] * images[:, :, :3, :3]
+        # # S = H[:, 0, 0, 0]
+        # # S = H.view(64, -1)[:, 0]
+        # # _loss = ((S - gt_classes.float()) ** 2).mean()
+        # # loss = _loss * w
+        # # loss.backward(retain_graph=True)
+        # # g = torch.autograd.grad(loss, model.layer1.conv.weight, retain_graph=True, create_graph=True)
+        #
+        # _loss = ((pred_counts - gt_counts) ** 2).mean()
+        # loss = _loss * w
+        # loss.backward(retain_graph=True)
+        # g = torch.autograd.grad(loss, model.counter_head.conv3_conv.weight, retain_graph=True, create_graph=True)
+        #
+        # # cls_loss = F.cross_entropy(pred_classes, gt_classes, reduction='mean')
+        # pred_classes = pred_cls_logits[:, 0].float()
+        # # pred_classes.requires_grad = True
+        # cls_loss = ((pred_classes - gt_classes.float()) ** 2).mean()
+        # loss = cls_loss * w
+        # loss.backward(retain_graph=True)
+        # g = torch.autograd.grad(loss, model.cls_loc_head.fc.weight, retain_graph=True, create_graph=True)
+        # a = 100
 
-        losses["total_loss"].backward()
+        # ------------------ DEBUG ---------------------
+
+        losses = compute_losses(
+            pred_cls_logits, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts, grad_normalizer=grad_normalizer
+        )
+
+        performances = measure_performances(pred_cls_logits, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts)
+
+        if grad_normalizer is not None:
+            grad_normalizer.adjust_grad(losses, model)
+            loss_weight = {f"w_{i}": w.item() for i, w in enumerate(grad_normalizer.loss_weight)}
+            visualizer.display(epoch, i, losses, performances, other_metrics=loss_weight, lr=get_current_lr(optimizer))
+        else:
+            losses["total_loss"].backward()
+            visualizer.display(epoch, i, losses, performances, lr=get_current_lr(optimizer))
+
         optimizer.step()
 
     torch.save(model.state_dict(), f"checkpoints/model_epoch{epoch}.pth")
 
 
-def compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts):
+def compute_losses(pred_classes, pred_bboxes, pred_counts, gt_classes, gt_bboxes, gt_counts, grad_normalizer=None):
     losses = {
         "cls_loss": class_loss(pred_classes, gt_classes),
         "bbox_loss": bbox_loss(pred_bboxes, gt_bboxes),
         "counter_loss": counter_loss(pred_counts, gt_counts),
     }
+
+    if grad_normalizer is not None:
+        grad_normalizer.adjust_losses(losses)
+
     losses["total_loss"] = functools.reduce(lambda x, y: x + y, [l for n, l in losses.items()])
     return losses
 
