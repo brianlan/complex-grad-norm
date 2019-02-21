@@ -12,30 +12,38 @@ class SimpleGradNormalizer:
     def __init__(self, lr_init=0.025, alpha=0.16):
         self.alpha = alpha
         self.init_loss = None
-        self.loss_weight = nn.Parameter(torch.ones(3))
-        # self.loss_weight = [torch.tensor(1., requires_grad=True) for _ in range(3)]
-        # self.w1 = nn.Parameter(torch.tensor([1.]))
-        # self.w2 = nn.Parameter(torch.tensor([1.]))
-        # self.w3 = nn.Parameter(torch.tensor([1.]))
-        self.optim = torch.optim.Adam([self.loss_weight], lr=lr_init)
+        # self.loss_weight = nn.Parameter(torch.ones(3, device='cuda:0'))
+        # self.optim = torch.optim.Adam([self.loss_weight], lr=lr_init)
+        default_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.loss_weight = {
+            "cls_loss": nn.Parameter(torch.tensor([1.], device=default_device)),
+            "bbox_loss": nn.Parameter(torch.tensor([1.], device=default_device)),
+            "counter_loss": nn.Parameter(torch.tensor([1.], device=default_device)),
+        }
+        self.optim = torch.optim.Adam([self.loss_weight[k] for k, _ in self.loss_weight.items()], lr=lr_init)
 
     def set_init_loss(self, losses):
         self.init_loss = {n: torch.tensor([l.item()], device=l.device) for n, l in losses.items()}
 
     def normalize_loss_weight(self):
         num_losses = len(self.init_loss)
-        coef = num_losses / self.loss_weight.sum()
-        self.loss_weight.data[:] = self.loss_weight * coef
+        # self.loss_weight.data[:] = torch.clamp(self.loss_weight, min=0.0)
+        [self.loss_weight[n].data[:].clamp_(min=0.0) for n, _ in self.loss_weight.items()]
+        coef = num_losses / sum(l.item() for n, l in self.loss_weight.items())
+        # self.loss_weight.data[:] = self.loss_weight * coef
+        self.loss_weight["cls_loss"].data[:] *= coef
+        self.loss_weight["bbox_loss"].data[:] *= coef
+        self.loss_weight["counter_loss"].data[:] *= coef
 
     def adjust_losses(self, losses):
         if self.init_loss is None:
             self.set_init_loss(losses)
-        # losses["cls_loss"] *= self.loss_weight[0]
-        # losses["bbox_loss"] *= self.loss_weight[1]
-        # losses["counter_loss"] *= self.loss_weight[2]
-        losses["cls_loss"] = losses["cls_loss"] * self.loss_weight[0]
-        losses["bbox_loss"] = losses["bbox_loss"] * self.loss_weight[1]
-        losses["counter_loss"] = losses["counter_loss"] * self.loss_weight[2]
+        # losses["cls_loss"] = losses["cls_loss"] * self.loss_weight[0]
+        # losses["bbox_loss"] = losses["bbox_loss"] * self.loss_weight[1]
+        # losses["counter_loss"] = losses["counter_loss"] * self.loss_weight[2]
+        losses["cls_loss"] = losses["cls_loss"] * self.loss_weight["cls_loss"]
+        losses["bbox_loss"] = losses["bbox_loss"] * self.loss_weight["bbox_loss"]
+        losses["counter_loss"] = losses["counter_loss"] * self.loss_weight["counter_loss"]
 
     def adjust_grad(self, losses, model):
         losses["total_loss"].backward(retain_graph=True)
@@ -43,6 +51,8 @@ class SimpleGradNormalizer:
         shared_layers = [
             model.layer1.conv.weight,
             model.layer1.conv.bias,
+            model.layer2_1.conv.weight,
+            model.layer2_1.conv.bias,
             model.layer2_2.conv.weight,
             model.layer2_2.conv.bias,
         ]
@@ -51,12 +61,12 @@ class SimpleGradNormalizer:
         G_loc_norm = compute_grad_l2_norm(shared_layers, losses["bbox_loss"])
         G_cnt_norm = compute_grad_l2_norm(shared_layers, losses["counter_loss"])
 
-        G_avg = (G_cls_norm + G_loc_norm + G_cnt_norm) / 3
+        G_avg = (G_cls_norm + G_loc_norm + G_cnt_norm) / len(self.loss_weight)
 
         lhat_cls = losses["cls_loss"] / self.init_loss["cls_loss"]
         lhat_loc = losses["bbox_loss"] / self.init_loss["bbox_loss"]
         lhat_cnt = losses["counter_loss"] / self.init_loss["counter_loss"]
-        lhat_avg = (lhat_cls + lhat_loc + lhat_cnt) / 3
+        lhat_avg = (lhat_cls + lhat_loc + lhat_cnt) / len(self.loss_weight)
 
         inv_rate_cls = lhat_cls / lhat_avg
         inv_rate_loc = lhat_loc / lhat_avg
@@ -68,6 +78,8 @@ class SimpleGradNormalizer:
 
         print(f"=" * 120)
         print(f"|   G   | {G_cls_norm.item()}, {G_loc_norm.item()}, {G_cnt_norm.item()}")
+        print(f"| loss  | {losses['cls_loss'].item()}, {losses['bbox_loss'].item()}, {losses['counter_loss'].item()}")
+        print(f"| init  | {self.init_loss['cls_loss'].item()}, {self.init_loss['bbox_loss'].item()}, {self.init_loss['counter_loss'].item()}")
         print(f"| lhat  | {lhat_cls.item()}, {lhat_loc.item()}, {lhat_cnt.item()}")
         print(f"| inv_r | {inv_rate_cls.item()}, {inv_rate_loc.item()}, {inv_rate_cnt.item()}")
         print(f"|   C   | {C_cls.item()}, {C_loc.item()}, {C_cnt.item()}")
